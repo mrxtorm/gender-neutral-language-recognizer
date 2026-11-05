@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gender Neutral Language Recognizer</title>
+<style>
+  :root {
+    --bg: #f6f7fb; --card: #ffffff; --ink: #1d2433; --muted: #5b6577;
+    --accent: #4f46e5; --accent-ink: #ffffff; --line: #e3e6ee; --mark: #fde68a;
+    --ok: #166534; --okbg: #dcfce7; --warn: #92400e; --warnbg: #fef3c7;
+    --err: #991b1b; --errbg: #fee2e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151d; --card: #1b2030; --ink: #e8ebf3; --muted: #9aa4b8;
+      --accent: #818cf8; --accent-ink: #12151d; --line: #2b3247; --mark: #854d0e;
+      --ok: #86efac; --okbg: #14532d; --warn: #fcd34d; --warnbg: #422006;
+      --err: #fca5a5; --errbg: #450a0a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 20px; margin-bottom: 20px; }
+  .picker { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  input[type=file] { display: none; }
+  label.btn, button { background: var(--accent); color: var(--accent-ink); border: 0;
+          border-radius: 8px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  #fileName { color: var(--muted); }
+  .msg { padding: 12px 14px; border-radius: 8px; margin-top: 16px; font-weight: 500; }
+  .msg.ok { background: var(--okbg); color: var(--ok); }
+  .msg.warn { background: var(--warnbg); color: var(--warn); }
+  .msg.err { background: var(--errbg); color: var(--err); }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .arrow { color: var(--muted); }
+  mark { background: var(--mark); color: inherit; padding: 0 2px; border-radius: 3px; }
+  pre { white-space: pre-wrap; word-wrap: break-word; margin: 12px 0 0; font: .95rem/1.6 ui-monospace, Consolas, monospace; }
+  h2 { font-size: 1.05rem; margin: 0; }
+  .note { color: var(--muted); font-size: .9rem; margin: 8px 0 0; }
+  details summary { cursor: pointer; font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gender Neutral Language Recognizer</h1>
+  <p class="sub">Open a .txt file to find gender-specific terms and see suggested neutral alternatives.</p>
+
+  <section class="card">
+    <div class="picker">
+      <label class="btn" for="fileInput">Choose a file</label>
+      <input id="fileInput" type="file">
+      <span id="fileName">No file selected</span>
+    </div>
+    <div id="status" role="status" aria-live="polite"></div>
+  </section>
+
+  <section class="card" id="resultsCard" hidden>
+    <h2>Detected terms</h2>
+    <table id="resultsTable">
+      <thead><tr><th>Detected term</th><th>Occurrences</th><th>Suggested alternative</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="note" id="total"></p>
+    <p class="note">Suggestions are for review. The right replacement depends on context, so nothing is changed automatically.</p>
+  </section>
+
+  <section class="card" id="previewCard" hidden>
+    <h2>Document text (detected terms highlighted)</h2>
+    <pre id="preview"></pre>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Predefined terms (<span id="termCount"></span>)</summary>
+      <table id="termTable">
+        <thead><tr><th>Gender-specific term</th><th>Suggested alternative</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </details>
+  </section>
+</main>
+
+<script>
+/* ---------- Predefined terms: gender-specific -> neutral alternative ---------- */
+const TERMS = {
+  "chairman": "chairperson",
+  "policeman": "police officer",
+  "fireman": "firefighter",
+  "stewardess": "flight attendant",
+  "mankind": "humankind",
+  "businessman": "businessperson",
+  "salesman": "salesperson",
+  "mailman": "mail carrier",
+  "congressman": "member of Congress",
+  "spokesman": "spokesperson",
+  "workman": "worker",
+  "craftsman": "artisan",
+  "layman": "layperson",
+  "foreman": "supervisor",
+  "headmaster": "head teacher",
+  "waitress": "server",
+  "manpower": "workforce",
+  "man-made": "artificial",
+  "man hours": "work hours",
+  "ladies and gentlemen": "everyone",
+  "boys and girls": "children",
+  "he or she": "they",
+  "his or her": "their"
+};
+
+/* ---------- Build one regular expression from the term list ----------
+   1. Escape regex metacharacters in each term (e.g. the "-" in man-made).
+   2. Replace spaces with \s+ so "he  or\nshe" still matches.
+   3. Sort longest-first so "his or her" is tried before any shorter overlap.
+   4. Wrap in (?<![A-Za-z0-9_]) ... (?![A-Za-z0-9_]) : whole-word boundaries, so "he" never
+      matches inside "the" (and "fireman" never matches inside "firemanship").
+   5. Flags: g = every occurrence, i = ignore capitalization.                      */
+function buildRecognizer(terms) {
+  const escape = s => s.replace(/[.*+?^${}()|[\]\\\-]/g, "\\$&");
+  const parts = Object.keys(terms)
+    .sort((a, b) => b.length - a.length)
+    .map(t => escape(t).replace(/ /g, "\\s+"));
+  return new RegExp("(?<![A-Za-z0-9_])(" + parts.join("|") + ")(?![A-Za-z0-9_])", "gi");
+}
+const RECOGNIZER = buildRecognizer(TERMS);
+
+/* Normalise a matched string to its dictionary key (lowercase, single spaces). */
+const normalise = s => s.toLowerCase().replace(/\s+/g, " ");
+
+/* ---------- Analysis ---------- */
+function analyse(text) {
+  const counts = new Map();
+  for (const m of text.matchAll(RECOGNIZER)) {
+    const key = normalise(m[0]);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([term, count]) => ({ term, count, suggestion: TERMS[term] }))
+    .sort((a, b) => b.count - a.count || a.term.localeCompare(b.term));
+}
+
+/* ---------- UI ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function setStatus(kind, message) {
+  $("status").innerHTML = message ? `<div class="msg ${kind}">${esc(message)}</div>` : "";
+}
+function resetResults() { $("resultsCard").hidden = true; $("previewCard").hidden = true; }
+
+function showResults(text, rows) {
+  const body = $("resultsTable").querySelector("tbody");
+  body.innerHTML = rows.map(r =>
+    `<tr><td>${esc(r.term)}</td><td class="num">${r.count}</td><td><span class="arrow">→</span> ${esc(r.suggestion)}</td></tr>`
+  ).join("");
+  const total = rows.reduce((n, r) => n + r.count, 0);
+  $("total").textContent = `${total} occurrence${total === 1 ? "" : "s"} of ${rows.length} different term${rows.length === 1 ? "" : "s"}.`;
+  $("resultsCard").hidden = false;
+
+  let html = "", last = 0;
+  for (const m of text.matchAll(RECOGNIZER)) {
+    html += esc(text.slice(last, m.index)) + "<mark>" + esc(m[0]) + "</mark>";
+    last = m.index + m[0].length;
+  }
+  html += esc(text.slice(last));
+  $("preview").innerHTML = html;
+  $("previewCard").hidden = false;
+}
+
+function handleFile(file) {
+  resetResults();
+  setStatus("", "");
+  $("fileName").textContent = file.name;
+
+  if (!/\.txt$/i.test(file.name)) {
+    setStatus("err", "Unsupported file format. Please choose a .txt file.");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onerror = () => setStatus("err", "The file could not be read.");
+  reader.onload = () => {
+    const text = String(reader.result).replace(/^﻿/, "");
+    if (text.trim() === "") {
+      setStatus("warn", "The file is empty. Please choose a file that contains text.");
+      return;
+    }
+    const rows = analyse(text);
+    if (rows.length === 0) {
+      setStatus("ok", "No predefined gender-specific terms were detected.");
+      return;
+    }
+    setStatus("warn", "Gender-specific terms were detected. Review the suggestions below.");
+    showResults(text, rows);
+  };
+  reader.readAsText(file);
+}
+
+$("fileInput").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (f) handleFile(f);
+  e.target.value = "";           // allow re-selecting the same file
+});
+
+$("termCount").textContent = Object.keys(TERMS).length;
+$("termTable").querySelector("tbody").innerHTML = Object.entries(TERMS)
+  .map(([k, v]) => `<tr><td>${esc(k)}</td><td><span class="arrow">→</span> ${esc(v)}</td></tr>`).join("");
+</script>
+</body>
+</html>
